@@ -7,7 +7,15 @@ def load_data(path: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def analyse_lengths(df: pd.DataFrame) -> pd.DataFrame:
+def _max_nan_run(series: pd.Series) -> float:
+    mask = series.isna()
+    if not mask.any():
+        return float("nan")
+    run_lengths = mask.groupby(mask.ne(mask.shift()).cumsum()).transform('sum')
+    return float(run_lengths[mask].max())
+
+
+def analyse_lengths(df: pd.DataFrame) -> pd.DataFrame: #Momentan nicht in main() genutzt
     return (
         df.groupby('REF_AREA_LABEL')['year']
         .nunique()
@@ -176,212 +184,45 @@ def fill_isolated_linear(df: pd.DataFrame) -> pd.DataFrame:
     return df_filled
 
 
-def fill_remaining_spline(df_filled: pd.DataFrame, order: int = 3) -> pd.DataFrame:
-    """Füllt nach der linearen Behandlung verbliebene längere Lücken per Spline (nur innenliegend)."""
+def fill_isolated_spline(df: pd.DataFrame, order: int = 3) -> pd.DataFrame:
     filled_groups = []
     filled_points: list[tuple[str, int, float]] = []
-    for country, group in df_filled.groupby('REF_AREA_LABEL'):
+    for country, group in df.groupby('REF_AREA_LABEL'):
         series = (
             group
             .sort_values('year')
             .set_index('year')['OBS_VALUE']
         )
-
-        if series.isna().any() and series.notna().sum() >= order + 1:
-            missing_mask = series.isna()
+        missing_mask = series.isna()
+        if missing_mask.any():
             run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            target_mask = missing_mask & (run_lengths >= 2)
-            if target_mask.any():
+            max_run = run_lengths[missing_mask].max()
+            if max_run == 1:
                 try:
-                    series_interp = series.interpolate(
-                        method='spline',
-                        order=order,
-                        limit_direction='both',
-                        limit_area=None,
-                    )
+                    series_interp = series.interpolate(method='spline', order=order, limit_area='inside')
                 except Exception:
-                    series_interp = series.interpolate(method='linear', limit_direction='both')
-                series_interp[series.notna()] = series[series.notna()]
-                newly_filled = series_interp[target_mask].dropna()
-                for yr, val in newly_filled.items():
+                    series_interp = series.interpolate(method='linear', limit_area='inside')
+                newly = series_interp.loc[series_interp.index[missing_mask]].dropna()
+                for yr, val in newly.items():
                     filled_points.append((country, int(yr), float(val)))
-                # Nur die Ziel-Lücken übernehmen, Rest unverändert lassen
-                series[target_mask] = series_interp[target_mask]
-        # Verbleibende NaNs (nicht gefüllt) entfernen
-        series = series.dropna()
+                series = series_interp
         filled = series.reset_index()
         filled['REF_AREA_LABEL'] = country
         filled_groups.append(filled)
 
-    df_filled_spline = (
-        pd.concat(filled_groups, ignore_index=True)
-        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
-        .sort_values(['REF_AREA_LABEL', 'year'])
-        .reset_index(drop=True)
-    )
-    print("================================================")
-    print("Gefüllte Zeitreihen (Spline für längere Lücken):")
-    print("================================================")
-    print()
-    if filled_points:
-        for country, yr, val in filled_points:
-            print(f"- {country} {yr}: {val:.3f}")
-    return df_filled_spline
-
-
-def fill_remaining_linear(df_filled: pd.DataFrame) -> pd.DataFrame:
-    """Füllt längere Lücken per linearer Interpolation (nur Runs >=2)."""
-    filled_groups = []
-    filled_points: list[tuple[str, int, float]] = []
-    for country, group in df_filled.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
-        )
-
-        if series.isna().any():
-            missing_mask = series.isna()
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            target_mask = missing_mask & (run_lengths >= 2)
-            if target_mask.any():
-                series_interp = series.interpolate(method='linear', limit_direction='both')
-                series_interp[series.notna()] = series[series.notna()]
-                newly_filled = series_interp[target_mask].dropna()
-                for yr, val in newly_filled.items():
-                    filled_points.append((country, int(yr), float(val)))
-                series[target_mask] = series_interp[target_mask]
-        series = series.dropna()
-        filled = series.reset_index()
-        filled['REF_AREA_LABEL'] = country
-        filled_groups.append(filled)
-
-    df_filled_linear = (
+    df_filled = (
         pd.concat(filled_groups, ignore_index=True)
         [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
         .sort_values(['REF_AREA_LABEL', 'year'])
         .reset_index(drop=True)
     )
     if filled_points:
-        print()
-        print("================================================")
-        print("Gefüllte Zeitreihen (sequenzielle Lücken):")
-        print("================================================")
+        print("Aufgefüllte Punkte (Spline, isoliert):")
         for country, yr, val in filled_points:
             print(f"- {country} {yr}: {val:.3f}")
-    return df_filled_linear
+    return df_filled
 
 
-# Vergleich linear vs. Spline für 2er-Sequenzen
-def _load_complete_series(path: str) -> list[tuple[str, np.ndarray, np.ndarray]]:
-    df = pd.read_csv(path)
-    out: list[tuple[str, np.ndarray, np.ndarray]] = []
-    for country, group in df.groupby("REF_AREA_LABEL"):
-        years = group["year"].astype(int)
-        full_years = np.arange(years.min(), years.max() + 1)
-        series = group.set_index("year")["OBS_VALUE"].reindex(full_years)
-        if series.isna().any() or len(series) < 4:
-            continue
-        out.append((country, full_years, series.to_numpy()))
-    return out
-
-
-def _mask_blocks(series_list, fraction: float, seed: int):
-    rng = np.random.default_rng(seed)
-    masked_list = []
-    positions = []
-    for idx, (country, years, values) in enumerate(series_list):
-        vals = values.copy()
-        valid_starts = []
-        for j in range(1, len(vals) - 2):
-            if (
-                not np.isnan(vals[j - 1])
-                and not np.isnan(vals[j])
-                and not np.isnan(vals[j + 1])
-                and not np.isnan(vals[j + 2])
-            ):
-                valid_starts.append(j)
-        if not valid_starts:
-            masked_list.append((country, years, vals))
-            continue
-        target = max(1, int(len(valid_starts) * fraction))
-        available = set(valid_starts)
-        chosen = []
-        while available and len(chosen) < target:
-            s = rng.choice(sorted(available))
-            chosen.append(s)
-            for x in (s - 1, s, s + 1, s + 2):
-                available.discard(x)
-        for s in chosen:
-            for c in (s, s + 1):
-                positions.append((idx, c))
-                vals[c] = np.nan
-        masked_list.append((country, years, vals))
-    return masked_list, positions
-
-
-def _interp(series_list, method: str, order: int = 3):
-    out = []
-    for _, years, vals in series_list:
-        ser = pd.Series(vals, index=years).sort_index()
-        kwargs = {"method": method, "limit_direction": "both"}
-        if method == "spline":
-            # Effektive Ordnung nur, wenn genügend Stützpunkte vorhanden sind
-            non_na = ser.notna().sum()
-            eff_order = min(order, max(1, non_na - 1))
-            kwargs["order"] = eff_order
-        try:
-            out.append(ser.interpolate(**kwargs).to_numpy())
-        except Exception:
-            # Fallback auf linear, falls Spline scheitert
-            out.append(ser.interpolate(method="linear", limit_direction="both").to_numpy())
-    return out
-
-
-def _eval(series_list, filled_list, positions):
-    orig = []
-    pred = []
-    for idx, pos in positions:
-        o = series_list[idx][2][pos]
-        p = filled_list[idx][pos]
-        if np.isnan(o) or np.isnan(p):
-            continue
-        orig.append(o)
-        pred.append(p)
-    if not orig:
-        return {"mae": float("nan"), "rmse": float("nan")}
-    orig_arr = np.array(orig)
-    pred_arr = np.array(pred)
-    abs_err = np.abs(orig_arr - pred_arr)
-    return {"mae": float(abs_err.mean()), "rmse": float(np.sqrt(np.mean(abs_err ** 2)))}
-
-
-def compare_sequence_methods(data_path: str, trials: int = 50, base_seed: int = 42, fraction: float = 0.05):
-    series_list = _load_complete_series(data_path)
-    mae_lin = []
-    mae_spl = []
-    rmse_lin = []
-    rmse_spl = []
-    for t in range(trials):
-        seed = base_seed + t
-        masked, pos = _mask_blocks(series_list, fraction=fraction, seed=seed)
-        filled_lin = _interp(masked, method="linear")
-        filled_spl = _interp(masked, method="spline", order=3)
-        m_lin = _eval(series_list, filled_lin, pos)
-        m_spl = _eval(series_list, filled_spl, pos)
-        mae_lin.append(m_lin["mae"])
-        mae_spl.append(m_spl["mae"])
-        rmse_lin.append(m_lin["rmse"])
-        rmse_spl.append(m_spl["rmse"])
-    return (
-        float(np.nanmean(mae_lin)),
-        float(np.nanmean(mae_spl)),
-        float(np.nanmean(rmse_lin)),
-        float(np.nanmean(rmse_spl)),
-    )
-
-
-# Vergleich linear vs. Spline auf isolierten Masken
 def _load_complete_series(path: str) -> list[tuple[str, np.ndarray, np.ndarray]]:
     df = pd.read_csv(path)
     out: list[tuple[str, np.ndarray, np.ndarray]] = []
@@ -478,43 +319,194 @@ def compare_isolated_methods(data_path: str, trials: int = 50, base_seed: int = 
     )
 
 
-def fill_isolated_spline(df: pd.DataFrame, order: int = 3) -> pd.DataFrame:
+def fill_remaining_linear(df_filled: pd.DataFrame) -> pd.DataFrame:
     filled_groups = []
     filled_points: list[tuple[str, int, float]] = []
-    for country, group in df.groupby('REF_AREA_LABEL'):
+    for country, group in df_filled.groupby('REF_AREA_LABEL'):
         series = (
             group
             .sort_values('year')
             .set_index('year')['OBS_VALUE']
         )
-        missing_mask = series.isna()
-        if missing_mask.any():
+
+        if series.isna().any():
+            missing_mask = series.isna()
             run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            max_run = run_lengths[missing_mask].max()
-            if max_run == 1:
-                try:
-                    series_interp = series.interpolate(method='spline', order=order, limit_area='inside')
-                except Exception:
-                    series_interp = series.interpolate(method='linear', limit_area='inside')
-                newly = series_interp.loc[series_interp.index[missing_mask]].dropna()
-                for yr, val in newly.items():
+            target_mask = missing_mask & (run_lengths >= 2)
+            if target_mask.any():
+                series_interp = series.interpolate(method='linear', limit_direction='both')
+                series_interp[series.notna()] = series[series.notna()]
+                newly_filled = series_interp[target_mask].dropna()
+                for yr, val in newly_filled.items():
                     filled_points.append((country, int(yr), float(val)))
-                series = series_interp
+                series[target_mask] = series_interp[target_mask]
+        series = series.dropna()
         filled = series.reset_index()
         filled['REF_AREA_LABEL'] = country
         filled_groups.append(filled)
 
-    df_filled = (
+    df_filled_linear = (
         pd.concat(filled_groups, ignore_index=True)
         [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
         .sort_values(['REF_AREA_LABEL', 'year'])
         .reset_index(drop=True)
     )
     if filled_points:
-        print("Aufgefüllte Punkte (Spline, isoliert):")
+        print()
+        print("================================================")
+        print("Gefüllte Zeitreihen (sequenzielle Lücken):")
+        print("================================================")
         for country, yr, val in filled_points:
             print(f"- {country} {yr}: {val:.3f}")
-    return df_filled
+    return df_filled_linear
+
+
+def fill_remaining_spline(df_filled: pd.DataFrame, order: int = 3) -> pd.DataFrame:
+    filled_groups = []
+    filled_points: list[tuple[str, int, float]] = []
+    for country, group in df_filled.groupby('REF_AREA_LABEL'):
+        series = (
+            group
+            .sort_values('year')
+            .set_index('year')['OBS_VALUE']
+        )
+
+        if series.isna().any() and series.notna().sum() >= order + 1:
+            missing_mask = series.isna()
+            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
+            target_mask = missing_mask & (run_lengths >= 2)
+            if target_mask.any():
+                try:
+                    series_interp = series.interpolate(
+                        method='spline',
+                        order=order,
+                        limit_direction='both',
+                        limit_area=None,
+                    )
+                except Exception:
+                    series_interp = series.interpolate(method='linear', limit_direction='both')
+                series_interp[series.notna()] = series[series.notna()]
+                newly_filled = series_interp[target_mask].dropna()
+                for yr, val in newly_filled.items():
+                    filled_points.append((country, int(yr), float(val)))
+                # Nur die Ziel-Lücken übernehmen, Rest unverändert lassen
+                series[target_mask] = series_interp[target_mask]
+        # Verbleibende NaNs (nicht gefüllt) entfernen
+        series = series.dropna()
+        filled = series.reset_index()
+        filled['REF_AREA_LABEL'] = country
+        filled_groups.append(filled)
+
+    df_filled_spline = (
+        pd.concat(filled_groups, ignore_index=True)
+        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
+        .sort_values(['REF_AREA_LABEL', 'year'])
+        .reset_index(drop=True)
+    )
+    print("================================================")
+    print("Gefüllte Zeitreihen (sequenzielle Lücken):")
+    print("================================================")
+    print()
+    if filled_points:
+        for country, yr, val in filled_points:
+            print(f"- {country} {yr}: {val:.3f}")
+    return df_filled_spline
+
+
+# Vergleich linear vs. Spline für 2er-Sequenzen (wird in main() nach isolierten Lücken aufgerufen)
+def _mask_blocks(series_list, fraction: float, seed: int):
+    rng = np.random.default_rng(seed)
+    masked_list = []
+    positions = []
+    for idx, (country, years, values) in enumerate(series_list):
+        vals = values.copy()
+        valid_starts = []
+        for j in range(1, len(vals) - 2):
+            if (
+                not np.isnan(vals[j - 1])
+                and not np.isnan(vals[j])
+                and not np.isnan(vals[j + 1])
+                and not np.isnan(vals[j + 2])
+            ):
+                valid_starts.append(j)
+        if not valid_starts:
+            masked_list.append((country, years, vals))
+            continue
+        target = max(1, int(len(valid_starts) * fraction))
+        available = set(valid_starts)
+        chosen = []
+        while available and len(chosen) < target:
+            s = rng.choice(sorted(available))
+            chosen.append(s)
+            for x in (s - 1, s, s + 1, s + 2):
+                available.discard(x)
+        for s in chosen:
+            for c in (s, s + 1):
+                positions.append((idx, c))
+                vals[c] = np.nan
+        masked_list.append((country, years, vals))
+    return masked_list, positions
+
+
+def _interp(series_list, method: str, order: int = 3):
+    out = []
+    for _, years, vals in series_list:
+        ser = pd.Series(vals, index=years).sort_index()
+        kwargs = {"method": method, "limit_direction": "both"}
+        if method == "spline":
+            # Effektive Ordnung nur, wenn genügend Stützpunkte vorhanden sind
+            non_na = ser.notna().sum()
+            eff_order = min(order, max(1, non_na - 1))
+            kwargs["order"] = eff_order
+        try:
+            out.append(ser.interpolate(**kwargs).to_numpy())
+        except Exception:
+            # Fallback auf linear, falls Spline scheitert
+            out.append(ser.interpolate(method="linear", limit_direction="both").to_numpy())
+    return out
+
+
+def _eval(series_list, filled_list, positions):
+    orig = []
+    pred = []
+    for idx, pos in positions:
+        o = series_list[idx][2][pos]
+        p = filled_list[idx][pos]
+        if np.isnan(o) or np.isnan(p):
+            continue
+        orig.append(o)
+        pred.append(p)
+    if not orig:
+        return {"mae": float("nan"), "rmse": float("nan")}
+    orig_arr = np.array(orig)
+    pred_arr = np.array(pred)
+    abs_err = np.abs(orig_arr - pred_arr)
+    return {"mae": float(abs_err.mean()), "rmse": float(np.sqrt(np.mean(abs_err ** 2)))}
+
+
+def compare_sequence_methods(data_path: str, trials: int = 50, base_seed: int = 42, fraction: float = 0.05):
+    series_list = _load_complete_series(data_path)
+    mae_lin = []
+    mae_spl = []
+    rmse_lin = []
+    rmse_spl = []
+    for t in range(trials):
+        seed = base_seed + t
+        masked, pos = _mask_blocks(series_list, fraction=fraction, seed=seed)
+        filled_lin = _interp(masked, method="linear")
+        filled_spl = _interp(masked, method="spline", order=3)
+        m_lin = _eval(series_list, filled_lin, pos)
+        m_spl = _eval(series_list, filled_spl, pos)
+        mae_lin.append(m_lin["mae"])
+        mae_spl.append(m_spl["mae"])
+        rmse_lin.append(m_lin["rmse"])
+        rmse_spl.append(m_spl["rmse"])
+    return (
+        float(np.nanmean(mae_lin)),
+        float(np.nanmean(mae_spl)),
+        float(np.nanmean(rmse_lin)),
+        float(np.nanmean(rmse_spl)),
+    )
 
 
 def save_clean(df_filled: pd.DataFrame, path: str, decimals: int | None = None) -> None:
@@ -528,17 +520,8 @@ def save_clean(df_filled: pd.DataFrame, path: str, decimals: int | None = None) 
     print("================================================")
 
 
-
-def _max_nan_run(series: pd.Series) -> float:
-    mask = series.isna()
-    if not mask.any():
-        return float("nan")
-    run_lengths = mask.groupby(mask.ne(mask.shift()).cumsum()).transform('sum')
-    return float(run_lengths[mask].max())
-
-
 def main():
-    df = load_data("data/pharma_consumption.csv")
+    df = load_data("data/raw/pharma_consumption.csv")
     _ = find_gaps(df)
 
     df_trimmed, _, _, _ = trim_by_missing_ratio(df, threshold=0.2)
@@ -560,7 +543,7 @@ def main():
 
     if has_isolated:
         avg_mae_lin, avg_mae_spl, avg_rmse_lin, avg_rmse_spl = compare_isolated_methods(
-            "data/pharma_consumption.csv", trials=50, base_seed=42, fraction=0.05
+            "data/raw/pharma_consumption.csv", trials=50, base_seed=42, fraction=0.05
         )
         print()
         print("================================================")
@@ -597,7 +580,7 @@ def main():
     
     if has_sequences:
         avg_seq_lin, avg_seq_spl, avg_seq_rmse_lin, avg_seq_rmse_spl = compare_sequence_methods(
-            "data/pharma_consumption.csv", trials=50, base_seed=42, fraction=0.05
+            "data/raw/pharma_consumption.csv", trials=50, base_seed=42, fraction=0.05
         )
         print()
         print("================================================")
@@ -617,8 +600,9 @@ def main():
     else:
         df_final = df_filled_isolated
 
-    save_clean(df_final, "data/pharma_consumption_imputed.csv", decimals=1) #Datei Pfad später im Abgabeordner noch anpassen
+    save_clean(df_final, "data/raw/pharma_consumption_imputed.csv", decimals=1) #Datei Pfad später im Abgabeordner noch anpassen
 
 
 if __name__ == "__main__":
     main()
+
