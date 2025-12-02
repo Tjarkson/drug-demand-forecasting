@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 import numpy as np
 
-SEP = "=" * 40
-
 
 def load_data(path: str) -> pd.DataFrame:
     return pd.read_csv(path)
