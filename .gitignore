@@ -222,3 +222,4 @@ reports/*.html
 
 # Ignore processed data
 final/data/
+
