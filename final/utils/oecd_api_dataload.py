@@ -18,7 +18,7 @@ MEASURE_CODE = "PH_CON"
 UNIT_MEASURE_CODE = "DDD_10P3HB"  # OECD label for DDD per 1 000 inhabitants per day #deutsch
 MARKET_TYPE_CODE = "_Z"  # Only “Not applicable” is disseminated for this dataset
 DEFAULT_PHARMACEUTICAL_CODES: List[str] = []  # wird aus der Codelist befüllt
-DEFAULT_LAST_N_OBSERVATIONS: int | None = 5000  # holt vollständige Historie pro Serie
+DEFAULT_LAST_N_OBSERVATIONS: int | None = 2000  # holt vollständige Historie pro Serie
 
 DIMENSION_AT_OBSERVATION = "TIME_PERIOD"
 REQUEST_HEADERS = {
@@ -31,7 +31,7 @@ BACKOFF_INITIAL_SECONDS = 1.0
 REQUEST_COOLDOWN_SECONDS = 12.0  # Pause nach jedem Request, um Rate Limits zu vermeiden
 MAX_BACKOFF_SECONDS = 90.0
 RATE_LIMIT_RESET_SECONDS = 120.0  # längere Cooldown-Phase nach wiederholten 429er
-INTER_CHUNK_SLEEP_SECONDS = 20.0  # zusätzliche Pause zwischen Codes
+INTER_CHUNK_SLEEP_SECONDS = 10.0  # zusätzliche Pause zwischen Codes
 MIN_RETRY_AFTER_SECONDS = 60.0  # falls die API kein Retry-After schickt
 
 _SESSION = requests.Session()
@@ -39,12 +39,6 @@ _SESSION = requests.Session()
 #######################################################
 # Hilfsfunktionen für OECD SDMX API Zugriff und Parsing
 #######################################################
-
-def _chunked(seq: Sequence[str], chunk_size: int) -> Iterator[List[str]]:
-    # Zerlegt eine Sequenz in Chunks fester Größe
-    for idx in range(0, len(seq), max(1, chunk_size)):
-        yield list(seq[idx : idx + chunk_size])
-
 
 def _extract_label(value_meta: Dict[str, Any]) -> str | None:
     # Holt eine menschenlesbare Beschriftung aus einem SDMX-Werteobjekt
@@ -251,7 +245,7 @@ def load_pharmaceutical_consumption(
     if pharmaceutical_codes is None:
         codes = _fetch_pharmaceutical_codes()
         if codes:
-            print("Gefundene ATC-Codes aus CL_PHARMACEUTICAL:")
+            print("Gefundene ATC-Codes in Code-Liste CL_PHARMACEUTICAL:")
             print(", ".join(codes))
     else:
         codes = list(pharmaceutical_codes)
@@ -273,9 +267,9 @@ def load_pharmaceutical_consumption(
         return pd.DataFrame()
 
     frames: List[pd.DataFrame] = []
-    for idx, chunk in enumerate(_chunked(codes, MAX_CODES_PER_CHUNK), start=1):
-        print(f"({idx}/{len(codes)}) ATC-Code(s): {', '.join(chunk)}")
-        payload = _request_chunk(chunk, last_n_observations)
+    for idx, code in enumerate(codes, start=1):
+        print(f"Lade Daten für ATC-Code: {code} ({idx}/{len(codes)})")
+        payload = _request_chunk([code], last_n_observations)
         rows = _parse_sdmx(payload)
         if rows:
             frames.append(pd.DataFrame(rows))
@@ -297,24 +291,6 @@ def load_pharmaceutical_consumption(
 
     return df
 
-
-def main() -> None:
-    # Führt den vollständigen OECD-Datenabruf und CSV-Export aus
-    df = load_pharmaceutical_consumption()
-    output_path = "data/raw/pharma_consumption.csv"
-    df.to_csv(output_path, index=False)
-    print(f"CSV exportiert nach {output_path}")
-
-    country_col = "REF_AREA" if "REF_AREA" in df.columns else None
-    pharma_col = "PHARMACEUTICAL" if "PHARMACEUTICAL" in df.columns else None
-    rows = len(df)
-    pharma_n = df[pharma_col].nunique() if pharma_col else 0
-    country_n = df[country_col].nunique() if country_col else 0
-    print(
-        f"Loaded {rows:,} rows for {pharma_n} ATC class "
-        f"and {country_n} countries."
-    )
-    print(df.head(10))
 
 
 
