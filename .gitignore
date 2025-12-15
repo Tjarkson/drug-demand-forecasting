@@ -219,3 +219,6 @@ data/*
 !data/.gitkeep
 models/*
 reports/*.html
+
+# Ignore processed data
+final/data/
