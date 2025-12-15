@@ -1,6 +1,10 @@
 from __future__ import annotations
-from typing import Any, Dict, Iterator, List, Sequence
+from typing import Any, Dict, List, Sequence
+from pathlib import Path
 
+# Fester Ausgabeort wie im Beispiel
+OUTPUT_DIR = Path("/Users/tjark-sorenniemann/Documents/drug-demand-forecasting/data/raw")
+DEFAULT_OUTPUT_PATH = OUTPUT_DIR / "pharma_consumption.csv"
 import pandas as pd
 import requests
 import time
@@ -25,7 +29,6 @@ REQUEST_HEADERS = {
     "Accept": "application/vnd.sdmx.data+json;version=1.0",
     "User-Agent": "drug-demand-forecasting/0.1 (+codex-cli)", #entfernen im Nachhinein!
 }
-MAX_CODES_PER_CHUNK = 1  # ein ATC-Code pro Request, um Kürzungen zu vermeiden
 MAX_RETRIES = 6
 BACKOFF_INITIAL_SECONDS = 1.0
 REQUEST_COOLDOWN_SECONDS = 12.0  # Pause nach jedem Request, um Rate Limits zu vermeiden
@@ -127,6 +130,7 @@ def _fetch_pharmaceutical_codes() -> List[str]:
 def _request_chunk(
     pharma_codes: Sequence[str],
     last_n_observations: int | None,
+    request_cooldown_seconds: float,
 ) -> Dict[str, Any]:
     # Ruft einen ATC-Code-Chunk bei der OECD-SDMX-API ab und handhabt Rate-Limits/Backoff
     params: Dict[str, Any] = {"dimensionAtObservation": DIMENSION_AT_OBSERVATION}
@@ -141,7 +145,16 @@ def _request_chunk(
     backoff = BACKOFF_INITIAL_SECONDS
     retries = 0
     while True:
-        resp = _SESSION.get(url, params=params, headers=REQUEST_HEADERS, timeout=120)
+        try:
+            resp = _SESSION.get(url, params=params, headers=REQUEST_HEADERS, timeout=120)
+        except requests.exceptions.ConnectionError as exc:
+            if retries < MAX_RETRIES:
+                print("Hinweis: Verbindungsfehler – versuche erneut.")
+                retries += 1
+                time.sleep(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                continue
+            raise RuntimeError("OECD request failed: Connection error") from exc
         if resp.status_code == 429:
             print("Hinweis: OECD-API Rate Limit (429) – warte und versuche erneut.")
             retry_after = resp.headers.get("Retry-After")
@@ -176,8 +189,8 @@ def _request_chunk(
                 f"OECD request failed ({resp.status_code}): {resp.text[:200]}"
             ) from exc
 
-        if REQUEST_COOLDOWN_SECONDS:
-            time.sleep(REQUEST_COOLDOWN_SECONDS)
+        if request_cooldown_seconds:
+            time.sleep(request_cooldown_seconds)
         data = resp.json().get("data")
         return data or {"dataSets": [], "structure": {}}
 
@@ -231,6 +244,7 @@ def _parse_sdmx(message: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     return rows
 
+
 ########################################
 # Main-Funktion zum Laden der OECD-Daten
 ########################################
@@ -238,6 +252,8 @@ def _parse_sdmx(message: Dict[str, Any]) -> List[Dict[str, Any]]:
 def load_pharmaceutical_consumption(
     pharmaceutical_codes: Sequence[str] | None = None,
     last_n_observations: int | None = DEFAULT_LAST_N_OBSERVATIONS,
+    request_cooldown_seconds: float = REQUEST_COOLDOWN_SECONDS,
+    inter_request_sleep_seconds: float = INTER_CHUNK_SLEEP_SECONDS,
 ) -> pd.DataFrame:
     # Lädt OECD-Verbrauchsdaten (DDD) und liefert sie als DataFrame zurück
     all_codes_from_list: List[str] | None = None
@@ -245,7 +261,7 @@ def load_pharmaceutical_consumption(
     if pharmaceutical_codes is None:
         codes = _fetch_pharmaceutical_codes()
         if codes:
-            print("Gefundene ATC-Codes in Code-Liste CL_PHARMACEUTICAL:")
+            print("Verfügbare ATC-Codes aus der OECD API:")
             print(", ".join(codes))
     else:
         codes = list(pharmaceutical_codes)
@@ -268,16 +284,16 @@ def load_pharmaceutical_consumption(
 
     frames: List[pd.DataFrame] = []
     for idx, code in enumerate(codes, start=1):
-        print(f"Lade Daten für ATC-Code: {code} ({idx}/{len(codes)})")
-        payload = _request_chunk([code], last_n_observations)
+        print(f"Lade Daten für ATC-Code {code} ({idx}/{len(codes)})")
+        payload = _request_chunk([code], last_n_observations, request_cooldown_seconds)
         rows = _parse_sdmx(payload)
         if rows:
             frames.append(pd.DataFrame(rows))
             print(f"    -> erhalten: {len(rows)} Zeilen")
         else:
             print("    -> keine Daten erhalten")
-        if INTER_CHUNK_SLEEP_SECONDS:
-            time.sleep(INTER_CHUNK_SLEEP_SECONDS)
+        if inter_request_sleep_seconds:
+            time.sleep(inter_request_sleep_seconds)
 
     if not frames:
         return pd.DataFrame()
@@ -286,11 +302,44 @@ def load_pharmaceutical_consumption(
     # Roh-Spalten beibehalten; Typen und Sortierung anwenden
     df["TIME_PERIOD"] = pd.to_numeric(df["TIME_PERIOD"], errors="coerce").astype("Int64")
     df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
-    df.sort_values([ "PHARMACEUTICAL", "REF_AREA", "TIME_PERIOD"], inplace=True)
+    df.sort_values(["PHARMACEUTICAL", "REF_AREA", "TIME_PERIOD"], inplace=True)
     df.reset_index(drop=True, inplace=True)
+
+    # Export nach festem data/raw-Pfad
+    out_path = DEFAULT_OUTPUT_PATH
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+    print(f"CSV exportiert nach {out_path}")
 
     return df
 
+##############################################################################################
+# Alternativer Zugriff auf die Roh-Daten über eine abgespeicherte CSV-Datei (Stand: 2025-12-15)
+##############################################################################################
 
+def load_pharmaceutical_consumption_from_csv(file_path: str) -> pd.DataFrame:
+    # Lädt OECD-Verbrauchsdaten aus einer gespeicherten CSV-Datei
 
+    df = pd.read_csv(file_path)
 
+    # Typen und Sortierung anwenden
+    df["TIME_PERIOD"] = pd.to_numeric(df["TIME_PERIOD"], errors="coerce").astype("Int64")
+    df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
+    df.sort_values(["PHARMACEUTICAL", "REF_AREA", "TIME_PERIOD"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    return df
+
+########################################
+# Einfache explorative Datenanalyse (EDA)
+########################################
+
+def simple_eda(df: pd.DataFrame) -> None:
+    # Führt eine einfache explorative Datenanalyse durch und gibt Zusammenfassungen aus
+
+    print(
+        f"\n{df.shape[0]:,} Zeilen und {df.shape[1]:,} Spalten geladen für "
+        f"{df['PHARMACEUTICAL'].nunique()} ATC-Codes und {df['REF_AREA'].nunique()} Länder."
+    )
+    df.info()
+    print(f"\n{df.head()}")
