@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
-<<<<<<< Updated upstream
-=======
+
 import matplotlib.pyplot as plt
 
 #############################
@@ -42,7 +41,6 @@ def missing_data_handling(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     return summary
->>>>>>> Stashed changes
 
 
 def missing_data_overview(df: pd.DataFrame) -> pd.DataFrame:
