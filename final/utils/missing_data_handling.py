@@ -1,607 +1,676 @@
 import pandas as pd
 import numpy as np
+<<<<<<< Updated upstream
+=======
+import matplotlib.pyplot as plt
+
+#############################
+# Umgang mit fehlenden Werten
+#############################
+
+def missing_data_handling(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for country, group in df.groupby('REF_AREA'):
+        years = group['TIME_PERIOD'].dropna().astype(int)
+        if years.empty:
+            continue
+        first_year = int(years.min())
+        last_year = int(years.max())
+        full_years = set(range(first_year, last_year + 1))
+        observed_years = set(years)
+        missing_years = sorted(full_years - observed_years)
+        span_len = last_year - first_year + 1
+        observed_periods = len(observed_years)
+        missing_count = len(missing_years)
+        missing_quote = missing_count / span_len if span_len else 0.0
+        rows.append(
+            {
+                "country": country,
+                "first_year": first_year,
+                "last_year": last_year,
+                "series_length": span_len,
+                "observed_periods": observed_periods,
+                "missing_count": missing_count,
+                "missing_quote": missing_quote,
+                "missing_years": missing_years,
+            }
+        )
+    summary = (
+        pd.DataFrame(rows)
+        .query("missing_count > 0")
+        .sort_values("missing_quote", ascending=False)
+        .reset_index(drop=True)
+    )
+    return summary
+>>>>>>> Stashed changes
 
 
-def load_data(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
+def missing_data_overview(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for country, group in df.groupby('REF_AREA'):
+        years = group['TIME_PERIOD'].dropna().astype(int)
+        if years.empty:
+            continue
+        first_year = int(years.min())
+        last_year = int(years.max())
+        full_years = set(range(first_year, last_year + 1))
+        observed_years = set(years)
+        missing_years = sorted(full_years - observed_years)
+        nan_years = sorted(
+            group.loc[group["OBS_VALUE"].isna(), "TIME_PERIOD"].dropna().astype(int).unique()
+        )
+        combined_missing_years = sorted(set(missing_years) | set(nan_years))
+        span_len = last_year - first_year + 1
+        observed_periods = len(observed_years)
+        missing_count = len(combined_missing_years)
+        missing_quote = missing_count / span_len if span_len else 0.0
+        rows.append(
+            {
+                "country": country,
+                "first_year": first_year,
+                "last_year": last_year,
+                "series_length": span_len,
+                "observed_periods": observed_periods,
+                "missing_count": missing_count,
+                "missing_quote": missing_quote,
+                "missing_years": combined_missing_years,
+            }
+        )
+    summary = (
+        pd.DataFrame(rows)
+        .query("missing_count > 0")
+        .sort_values("missing_quote", ascending=False)
+        .reset_index(drop=True)
+    )
+    summary["missing_years"] = summary["missing_years"].apply(
+        lambda ys: ", ".join(str(y) for y in ys)
+    )
+    return summary
 
+def plot_missing_data(
+    df: pd.DataFrame,
+    ref_area: str,
+    time_col: str = "TIME_PERIOD",
+    value_col: str = "OBS_VALUE",
+    global_years_range: tuple[int, int] | None = None,
+    global_ylim: tuple[float, float] | None = None,
+    xlim: tuple[int, int] | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> None:
+    # Visualisiert eine Zeitreihe und zeigt Luecken als Unterbrechungen.
+    data = df[df["REF_AREA"] == ref_area].sort_values(time_col)
+    if data.empty:
+        raise ValueError(f"Keine Daten fuer {ref_area} in Spalte REF_AREA.")
 
-def _max_nan_run(series: pd.Series) -> float:
-    mask = series.isna()
-    if not mask.any():
-        return float("nan")
-    run_lengths = mask.groupby(mask.ne(mask.shift()).cumsum()).transform('sum')
-    return float(run_lengths[mask].max())
+    if global_years_range is not None:
+        min_year, max_year = global_years_range
+    else:
+        years = df[time_col].dropna().astype(int)
+        if years.empty:
+            raise ValueError(f"Keine gueltigen Jahre in Spalte {time_col}.")
+        min_year = int(years.min())
+        max_year = int(years.max())
 
+    if xlim is None:
+        xlim = (min_year, max_year)
+    if ylim is None:
+        if global_ylim is not None:
+            ylim = global_ylim
+        else:
+            all_vals = df[value_col].dropna()
+            if not all_vals.empty:
+                ylim = (float(all_vals.min()), float(all_vals.max()))
 
-def analyse_lengths(df: pd.DataFrame) -> pd.DataFrame: #Momentan nicht in main() genutzt
-    return (
-        df.groupby('REF_AREA_LABEL')['year']
-        .nunique()
-        .reset_index(name='num_years')
-        .sort_values('num_years', ascending=False)
+    series = (
+        data.set_index(data[time_col].astype(int))[value_col]
+        .reindex(range(min_year, max_year + 1))
     )
 
+    fig, ax = plt.subplots(figsize=(6.5, 1))
+    ax.plot(list(series.index), series.to_numpy(), color="black", linewidth=1.5)
+    present_mask = series.notna()
+    if present_mask.any():
+        ax.scatter(
+            list(series.index[present_mask]),
+            series[present_mask].to_numpy(),
+            color="black",
+            s=10,
+            zorder=4,
+        )
+    font_kwargs = {"fontfamily": "Times New Roman", "fontsize": 12}
+    ax.set_title(f"{ref_area} - Zeitreihe mit fehlenden Werten", **font_kwargs)
+    ax.set_xlabel("Jahr", **font_kwargs)
+    ax.set_ylabel(value_col, **font_kwargs)
+    ax.tick_params(axis="both", labelsize=12)
+    plt.setp(ax.get_xticklabels(), fontfamily="Times New Roman", fontsize=12)
+    plt.setp(ax.get_yticklabels(), fontfamily="Times New Roman", fontsize=12)
+    ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    ax.grid(True, alpha=0.2)
+    plt.show()
 
-def find_gaps(df: pd.DataFrame) -> pd.DataFrame:
-    df_sorted = df.sort_values(['REF_AREA_LABEL', 'year'])
-    gaps = []
-    for country, group in df_sorted.groupby('REF_AREA_LABEL'):
-        years = group['year'].dropna().astype(int).sort_values()
-        expected = range(years.min(), years.max() + 1)
-        missing = sorted(set(expected).difference(years))
-        if missing:
-            gaps.append({
-                'country': country,
-                'first_year': int(years.min()),
-                'last_year': int(years.max()),
-                'missing_years': missing,
-            })
-    gap_df = pd.DataFrame(gaps)
-    print("================================================")
-    print("Länder mit Lücken in den Zeitreihen:")
-    print("================================================")
-    print(gap_df)
-    return gap_df
+######################################################################
+# Kürzen der Zeitreihen mit Anteil fehlender Werte von mindestens 20 %
+######################################################################
 
+def trim_by_missing_ratio(df: pd.DataFrame, threshold: float = 0.2) -> tuple[pd.DataFrame, list[tuple[str, int, int]], pd.DataFrame, dict[str, str]]:
+    # Kürzt Zeitreihen von Anfang an bis der Fehlanteil <= Schwellenwert ist.
+    original_columns = list(df.columns)
+    extra_cols = [c for c in original_columns if c not in ["REF_AREA", "TIME_PERIOD", "OBS_VALUE"]]
+    summary = missing_data_handling(df)
+    countries_above = summary.loc[summary["missing_quote"] > threshold].reset_index(drop=True)
+    countries_above_set = set(countries_above["country"])
+    missing_count_map = summary.set_index("country")["missing_count"].to_dict()
 
-def trim_by_missing_ratio(df: pd.DataFrame, threshold: float = 0.2) -> tuple[pd.DataFrame, list[tuple[str, int, int]], int, int]:
-    """Kürzt Reihen vom Anfang, bis der Fehlanteil <= threshold ist, und entfernt verbleibende NaNs."""
     trimmed_groups = []
     cut_events: list[tuple[str, int, int]] = []  # (country, from_year, to_year)
-    total_before = 0
-    total_after = 0
-    removed_na_after_cut = 0
+    removed_existing_map: dict[str, str] = {}
 
-    for country, group in df.groupby('REF_AREA_LABEL'):
-        group_sorted = group.sort_values('year')
-        full_years = range(group_sorted['year'].min(), group_sorted['year'].max() + 1)
+    for country, group in df.groupby('REF_AREA'):
+        group_sorted = group.sort_values('TIME_PERIOD')
+        full_years = range(group_sorted['TIME_PERIOD'].min(), group_sorted['TIME_PERIOD'].max() + 1)
         series = (
             group_sorted
-            .set_index('year')['OBS_VALUE']
+            .set_index('TIME_PERIOD')['OBS_VALUE']
             .reindex(full_years)
         )
-        total_before += len(series)
-
-        removed_years = []
-        # Kürzen vom Anfang, solange Quote über Schwelle oder erste/letzte Werte fehlen
-        while len(series) > 0:
+        if country in countries_above_set:
             total_len = len(series)
-            missing_ratio = series.isna().sum() / total_len if total_len else 0
-            first_missing = pd.isna(series.iloc[0])
-            last_missing = pd.isna(series.iloc[-1])
-            if missing_ratio <= threshold and not first_missing and not last_missing:
-                break
-            # entferne das erste Jahr
-            removed_years.append(int(series.index[0]))
-            series = series.iloc[1:]
-        # Sicherstellen, dass keine trailing NaNs verbleiben
-        while len(series) > 0 and pd.isna(series.iloc[-1]):
-            removed_years.append(int(series.index[-1]))
-            series = series.iloc[:-1]
-        if removed_years:
-            removed_years = sorted(removed_years)
-            start = removed_years[0]
-            prev = removed_years[0]
-            for yr in removed_years[1:]:
-                if yr == prev + 1:
-                    prev = yr
-                else:
-                    cut_events.append((country, start, prev))
-                    start = prev = yr
-            cut_events.append((country, start, prev))
+            missing_count = int(missing_count_map.get(country, 0))
+            removed_start = None
+            removed_end = None
+            # Kürzen vom Anfang, solange Missing-Quote über Schwelle
+            while total_len > 0 and (missing_count / total_len) > threshold:
+                year0 = int(series.index[0])
+                removed_start = removed_start or year0
+                removed_end = year0
+                if pd.isna(series.iloc[0]):
+                    missing_count -= 1
+                series = series.iloc[1:]
+                total_len -= 1
+            # Wenn nach Unterschreiten der Schwelle weiterhin führende NaNs vorhanden sind,
+            # ebenfalls abschneiden.
+            while total_len > 0 and pd.isna(series.iloc[0]):
+                year0 = int(series.index[0])
+                removed_start = removed_start or year0
+                removed_end = year0
+                missing_count = max(missing_count - 1, 0)
+                series = series.iloc[1:]
+                total_len -= 1
+            if removed_start is not None:
+                cut_events.append((country, removed_start, removed_end))
+                existing_years = group_sorted["TIME_PERIOD"].dropna().astype(int)
+                removed_existing = sorted(
+                    y for y in existing_years if removed_start <= y <= removed_end
+                )
+                removed_existing_map[country] = ", ".join(str(y) for y in removed_existing)
         if series.empty:
             print()
             print(f"Warnung: {country} nach Schnitt keine Daten mehr vorhanden.")
             continue
 
-        # Restliche NaNs belassen (werden später interpoliert); nur trailing NaNs wurden oben entfernt
-        # Zähle ggf. entfernte trailing NaNs
-        removed_na_after_cut += 0
-
-        total_after += len(series)
-        trimmed = series.reset_index()
-        trimmed['REF_AREA_LABEL'] = country
+        trimmed = pd.DataFrame({
+            "TIME_PERIOD": series.index.astype(int),
+            "OBS_VALUE": series.to_numpy(),
+            "REF_AREA": country,
+        })
+        if extra_cols:
+            original_extra = (
+                group_sorted[["TIME_PERIOD"] + extra_cols]
+                .drop_duplicates(subset=["TIME_PERIOD"])
+            )
+            trimmed = trimmed.merge(original_extra, on="TIME_PERIOD", how="left")
         trimmed_groups.append(trimmed)
 
-    df_trimmed = (
-        pd.concat(trimmed_groups, ignore_index=True)
-        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
-        .sort_values(['REF_AREA_LABEL', 'year'])
-        .reset_index(drop=True)
-    )
-    print()
-    print("================================================")
-    print("Kürzung nach Missing-Anteil:")
-    print("================================================")
-    print(f"Anzahl Zeilen vor Kürzung: {total_before}")
-    print(f"Anzahl Zeilen nach Kürzung: {total_after}")
-    print(f"Entfernte Zeilen durch Kürzung: {total_before - total_after}")
-    # removed_na_after_cut nicht mehr genutzt (trailing NaNs fließen in removed_years ein)
-    if cut_events:
-        print()
-        print("================================================")
-        print("Abgeschnittene Reihen (>20 % fehlend/ Zeitreihe):")
-        print("================================================")
-        # Intervalle pro Land zusammenfassen (auch angrenzend)
-        per_country = {}
-        for country, start, end in cut_events:
-            per_country.setdefault(country, []).append((start, end))
-        for country, intervals in per_country.items():
-            merged = []
-            for s, e in sorted(intervals):
-                if not merged or s > merged[-1][1] + 1:
-                    merged.append([s, e])
-                else:
-                    merged[-1][1] = max(merged[-1][1], e)
-            for s, e in merged:
-                if s == e:
-                    print(f"- {country}: Jahr {s} entfernt")
-                else:
-                    print(f"- {country}: von Jahr {s} bis {e} entfernt")
-    return df_trimmed, cut_events, total_before, total_after
+    df_trimmed = pd.concat(trimmed_groups, ignore_index=True)
+    df_trimmed = df_trimmed.sort_values(['REF_AREA', 'TIME_PERIOD']).reset_index(drop=True)
 
+    return df_trimmed, cut_events, countries_above, removed_existing_map
 
-def fill_isolated_linear(df: pd.DataFrame) -> pd.DataFrame:
-    filled_groups = []
-    filled_points: list[tuple[str, int, float]] = []
-    for country, group in df.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
-        )
-        missing_mask = series.isna()
-        if missing_mask.any():
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            max_run = run_lengths[missing_mask].max()
-            if max_run == 1:
-                series_interp = series.interpolate(method='linear', limit_area='inside')
-                newly_filled = series_interp.loc[series_interp.index[missing_mask]].dropna()
-                for yr, val in newly_filled.items():
-                    filled_points.append((country, int(yr), float(val)))
-                series = series_interp
+##################################################################################
+# Auswahl einer geeigneten Imputationsmethode mithilfe einer Montecarlo-Simulation
+##################################################################################
 
-        filled = series.reset_index()
-        filled['REF_AREA_LABEL'] = country
-        filled_groups.append(filled)
+def missing_ratio_isolated(df: pd.DataFrame) -> float:
+    # Berechnet den Anteil isolierter fehlender Werte an der Gesamtlänge der Zeitreihen.
+    if df.empty:
+        return 0.0
 
-    df_filled = (
-        pd.concat(filled_groups, ignore_index=True)
-        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
-        .sort_values(['REF_AREA_LABEL', 'year'])
-        .reset_index(drop=True)
-    )
-    print()
-    print("================================================")
-    print("Gefüllte Zeitreihen (isolierte Lücken):")
-    print("================================================")
-    if filled_points:
-        for country, yr, val in filled_points:
-            print(f"- {country} {yr}: {val:.3f}")
-    print()
-    return df_filled
+    total_span = 0
+    isolated_missing = 0
 
-
-def fill_isolated_spline(df: pd.DataFrame, order: int = 3) -> pd.DataFrame:
-    filled_groups = []
-    filled_points: list[tuple[str, int, float]] = []
-    for country, group in df.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
-        )
-        missing_mask = series.isna()
-        if missing_mask.any():
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            max_run = run_lengths[missing_mask].max()
-            if max_run == 1:
-                try:
-                    series_interp = series.interpolate(method='spline', order=order, limit_area='inside')
-                except Exception:
-                    series_interp = series.interpolate(method='linear', limit_area='inside')
-                newly = series_interp.loc[series_interp.index[missing_mask]].dropna()
-                for yr, val in newly.items():
-                    filled_points.append((country, int(yr), float(val)))
-                series = series_interp
-        filled = series.reset_index()
-        filled['REF_AREA_LABEL'] = country
-        filled_groups.append(filled)
-
-    df_filled = (
-        pd.concat(filled_groups, ignore_index=True)
-        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
-        .sort_values(['REF_AREA_LABEL', 'year'])
-        .reset_index(drop=True)
-    )
-    if filled_points:
-        print("Aufgefüllte Punkte (Spline, isoliert):")
-        for country, yr, val in filled_points:
-            print(f"- {country} {yr}: {val:.3f}")
-    return df_filled
-
-
-def _load_complete_series(path: str) -> list[tuple[str, np.ndarray, np.ndarray]]:
-    df = pd.read_csv(path)
-    out: list[tuple[str, np.ndarray, np.ndarray]] = []
-    for country, group in df.groupby("REF_AREA_LABEL"):
-        years = group["year"].astype(int)
-        full_years = np.arange(years.min(), years.max() + 1)
-        series = group.set_index("year")["OBS_VALUE"].reindex(full_years)
-        if series.isna().any() or len(series) < 4:
+    for country, group in df.groupby("REF_AREA"):
+        years = group["TIME_PERIOD"].dropna().astype(int)
+        if years.empty:
             continue
-        out.append((country, full_years, series.to_numpy()))
-    return out
+        full_years = range(years.min(), years.max() + 1)
+        series = (
+            group
+            .sort_values("TIME_PERIOD")
+            .set_index("TIME_PERIOD")["OBS_VALUE"]
+            .reindex(full_years)
+        )
+        total_span += len(series)
+        if series.isna().any():
+            mask = series.isna()
+            run_lengths = mask.groupby(mask.ne(mask.shift()).cumsum()).transform("sum")
+            isolated_missing += int((mask & (run_lengths == 1)).sum())
+
+    if total_span == 0:
+        return 0.0
+
+    missing_ratio_isolated = float(isolated_missing / total_span)
+
+    return missing_ratio_isolated
+
+def missing_ratio_sequential(df: pd.DataFrame) -> tuple[float, str | None, int | None]:
+    # Berechnet den Anteil aufeinanderfolgender fehlender Werte an der Gesamtlänge der Zeitreihen.
+    if df.empty:
+        return 0.0, None, None
+
+    total_span = 0
+    sequential_missing = 0
+    longest_sequential_runs: dict[str, int] = {}
+
+    for country, group in df.groupby("REF_AREA"):
+        years = group["TIME_PERIOD"].dropna().astype(int)
+        if years.empty:
+            continue
+        full_years = range(years.min(), years.max() + 1)
+        series = (
+            group
+            .sort_values("TIME_PERIOD")
+            .set_index("TIME_PERIOD")["OBS_VALUE"]
+            .reindex(full_years)
+        )
+        total_span += len(series)
+        if series.isna().any():
+            mask = series.isna()
+            run_lengths = mask.groupby(mask.ne(mask.shift()).cumsum()).transform("sum")
+            seq_mask = mask & (run_lengths > 1)
+            if seq_mask.any():
+                sequential_missing += int(seq_mask.sum())
+                longest_sequential_runs[country] = int(run_lengths[seq_mask].max())
+
+    if total_span == 0:
+        return 0.0, None, None
+
+    missing_ratio_sequential = float(sequential_missing / total_span)
+
+    if longest_sequential_runs:
+        longest_seq_country = max(longest_sequential_runs, key=longest_sequential_runs.get)
+        longest_seq_len = longest_sequential_runs[longest_seq_country]
+    else:
+        longest_seq_country = None
+        longest_seq_len = None
+
+    return missing_ratio_sequential, longest_seq_country, longest_seq_len
 
 
-def _mask_isolated(series_list, fraction: float, seed: int):
+def filter_complete_series(
+    df: pd.DataFrame, group_col: str = "REF_AREA", value_col: str = "OBS_VALUE"
+) -> pd.DataFrame:
+    # Filtert den DataFrame auf Gruppen mit vollständigen Werten (keine NaNs).
+    if df.empty:
+        return df.copy()
+    na_counts = df.groupby(group_col)[value_col].apply(lambda s: s.isna().sum())
+    complete = na_counts[na_counts == 0].index
+    return df[df[group_col].isin(complete)].copy()
+
+def mask_isolated(df: pd.DataFrame, missing_ratio_isolated: float, seed: int):
+    # Maskiert isolierte fehlende Werte global über alle vollständigen Reihen (globales Target).
     rng = np.random.default_rng(seed)
-    masked_list = []
-    positions = []
-    for idx, (country, years, values) in enumerate(series_list):
-        vals = values.copy()
-        valid = []
-        for j in range(1, len(vals) - 1):
-            if not np.isnan(vals[j]) and not np.isnan(vals[j - 1]) and not np.isnan(vals[j + 1]):
-                valid.append(j)
-        if len(valid) < 3:
-            masked_list.append((country, years, vals))
+    masked_list: list[tuple[str, np.ndarray, np.ndarray]] = []
+    original_list: list[tuple[str, np.ndarray, np.ndarray]] = []
+    positions: list[tuple[int, int]] = []
+    if df.empty:
+        return masked_list, positions, original_list
+
+    series_data = []
+    for ref_area, group in df.sort_values("TIME_PERIOD").groupby("REF_AREA"):
+        time_period = group["TIME_PERIOD"].to_numpy()
+        vals = group["OBS_VALUE"].to_numpy().copy()
+        original_vals = vals.copy()
+        series_data.append((ref_area, time_period, vals, original_vals))
+
+    # Globale Maskierung über vollständige Reihen
+    complete_indices = [i for i, (_, _, vals, _) in enumerate(series_data) if not np.isnan(vals).any()]
+    if not complete_indices:
+        print("Keine vollstaendigen Zeitreihen ohne NaNs fuer Maskierung (isolated).")
+        for ref_area, time_period, vals, original_vals in series_data:
+            masked_list.append((ref_area, time_period, vals))
+            original_list.append((ref_area, time_period, original_vals))
+        return masked_list, positions, original_list
+
+    global_candidates: list[tuple[int, int]] = []
+    for idx in complete_indices:
+        vals = series_data[idx][2]
+        valid = [
+            j
+            for j in range(1, len(vals) - 1)
+            if not (np.isnan(vals[j]) or np.isnan(vals[j - 1]) or np.isnan(vals[j + 1]))
+        ]
+        for j in valid:
+            global_candidates.append((idx, j))
+
+    total_valid = len(global_candidates)
+    if total_valid == 0:
+        print("Keine gueltigen Positionen fuer Maskierung (isolated).")
+        for ref_area, time_period, vals, original_vals in series_data:
+            masked_list.append((ref_area, time_period, vals))
+            original_list.append((ref_area, time_period, original_vals))
+        return masked_list, positions, original_list
+
+    target = max(1, int(round(total_valid * missing_ratio_isolated)))
+    target = min(target, total_valid)
+
+    blocked_map: dict[int, set[int]] = {}
+    chosen_count = 0
+    for idx, pos in rng.permutation(global_candidates):
+        if chosen_count >= target:
+            break
+        blocked = blocked_map.setdefault(idx, set())
+        if pos in blocked:
             continue
-        target = max(1, int(len(valid) * fraction))
-        available = set(valid)
-        chosen = []
-        while available and len(chosen) < target:
-            pos = rng.choice(sorted(available))
-            chosen.append(pos)
-            available.discard(pos)
-            available.discard(pos - 1)
-            available.discard(pos + 1)
-        for c in chosen:
-            positions.append((idx, c))
-            vals[c] = np.nan
-        masked_list.append((country, years, vals))
-    return masked_list, positions
+        blocked.update({pos - 1, pos, pos + 1})
+        positions.append((idx, pos))
+        chosen_count += 1
+
+    for idx, (ref_area, time_period, vals, original_vals) in enumerate(series_data):
+        masked_vals = vals.copy()
+        for s_idx, pos in positions:
+            if s_idx == idx and pos < len(masked_vals):
+                masked_vals[pos] = np.nan
+        masked_list.append((ref_area, time_period, masked_vals))
+        original_list.append((ref_area, time_period, original_vals))
+
+    return masked_list, positions, original_list
+
+def mask_sequential(df: pd.DataFrame, missing_ratio_sequential: float, seed: int) -> tuple[list[tuple[str, np.ndarray, np.ndarray]], list[tuple[int, int]], list[tuple[str, np.ndarray, np.ndarray]]]:
+    # Maskiert sequenzielle fehlende Werte global über alle vollständigen Reihen (globales Target).
+    rng = np.random.default_rng(seed)
+    masked_list: list[tuple[str, np.ndarray, np.ndarray]] = []
+    original_list: list[tuple[str, np.ndarray, np.ndarray]] = []
+    positions: list[tuple[int, int]] = []
+    if df.empty:
+        return masked_list, positions, original_list
+    series_data = []
+    for ref_area, group in df.sort_values("TIME_PERIOD").groupby("REF_AREA"):
+        time_period = group["TIME_PERIOD"].to_numpy()
+        vals = group["OBS_VALUE"].to_numpy().copy()
+        original_vals = vals.copy()
+        series_data.append((ref_area, time_period, vals, original_vals))
+
+    # Globale Maskierung über vollständige Reihen
+    complete_indices = [i for i, (_, _, vals, _) in enumerate(series_data) if not np.isnan(vals).any()]
+    if not complete_indices:
+        print("Keine vollstaendigen Zeitreihen ohne NaNs fuer Maskierung (sequential).")
+        for ref_area, time_period, vals, original_vals in series_data:
+            masked_list.append((ref_area, time_period, vals))
+            original_list.append((ref_area, time_period, original_vals))
+        return masked_list, positions, original_list
+
+    global_starts: list[tuple[int, int]] = []
+    for idx in complete_indices:
+        vals = series_data[idx][2]
+        # Stelle sicher, dass nach dem Maskieren (3 Punkte) noch mindestens order+1 Stützpunkte übrig bleiben.
+        if len(vals) - 3 < (3 + 1):  # order=3 -> mind. 4 verbleibende Punkte
+            continue
+        valid_starts = [
+            j
+            for j in range(len(vals))
+            if j > 0
+            and (j + 2) < (len(vals) - 1)  # keine Maskierung am Anfang/Ende
+            and not (np.isnan(vals[j]) or np.isnan(vals[j + 1]) or np.isnan(vals[j + 2]))
+        ]
+        for j in valid_starts:
+            global_starts.append((idx, j))
+
+    total_starts = len(global_starts)
+    if total_starts == 0:
+        print("Keine gueltigen Startpunkte fuer Maskierung (sequential).")
+        for ref_area, time_period, vals, original_vals in series_data:
+            masked_list.append((ref_area, time_period, vals))
+            original_list.append((ref_area, time_period, original_vals))
+        return masked_list, positions, original_list
+
+    target = max(1, int(round(total_starts * missing_ratio_sequential)))
+    target = min(target, total_starts)
+
+    blocked_map: dict[int, set[int]] = {}
+    chosen = 0
+    for idx, start in rng.permutation(global_starts):
+        if chosen >= target:
+            break
+        blocked = blocked_map.setdefault(idx, set())
+        if start in blocked or (start + 1) in blocked or (start + 2) in blocked:
+            continue
+        blocked.update({start, start + 1, start + 2})
+        positions.append((idx, start))
+        chosen += 1
+
+    for idx, (ref_area, time_period, vals, original_vals) in enumerate(series_data):
+        masked_vals = vals.copy()
+        for s_idx, start in positions:
+            if s_idx == idx:
+                if start < len(masked_vals):
+                    masked_vals[start] = np.nan
+                if start + 1 < len(masked_vals):
+                    masked_vals[start + 1] = np.nan
+                if start + 2 < len(masked_vals):
+                    masked_vals[start + 2] = np.nan
+        masked_list.append((ref_area, time_period, masked_vals))
+        original_list.append((ref_area, time_period, original_vals))
+
+    return masked_list, positions, original_list
 
 
-def _interpolate(series_list, method: str, order: int | None = None):
+def interpolate_masked(masked_list, method: str, order: int = 3) -> list[np.ndarray]:
     filled = []
-    for _, years, vals in series_list:
+    for _, years, vals in masked_list:
         ser = pd.Series(vals, index=years).sort_index()
-        kwargs = {"method": method, "limit_area": "inside"}
+        kwargs = {"method": method, "limit_direction": "both"}
         if method == "spline":
-            kwargs["order"] = order or 3
-        filled.append(ser.interpolate(**kwargs).to_numpy())
+            non_na = ser.notna().sum()
+            eff_order = min(order, max(1, non_na - 1))
+            kwargs["order"] = eff_order
+        try:
+            filled.append(ser.interpolate(**kwargs).to_numpy())
+        except Exception:
+            # Fallback auf lineare Interpolation, falls Spline scheitert
+            filled.append(ser.interpolate(method="linear", limit_direction="both").to_numpy())
     return filled
 
 
-def _evaluate(series_list, filled_list, positions):
+def evaluate_masking(original_list, filled_list, positions):
+    # Berechnet MAE und RMSE zwischen Originalwerten und interpolierten Werten an maskierten Positionen.
     orig = []
     pred = []
     for idx, pos in positions:
-        o = series_list[idx][2][pos]
+        if idx >= len(original_list) or idx >= len(filled_list):
+            continue
+        if pos >= len(original_list[idx][2]) or pos >= len(filled_list[idx]):
+            continue
+        o = original_list[idx][2][pos]
         p = filled_list[idx][pos]
         if np.isnan(o) or np.isnan(p):
             continue
         orig.append(o)
         pred.append(p)
     if not orig:
-        return {"mae": float("nan"), "rmse": float("nan")}
+        return {"mae": float("nan"), "rmse": float("nan"), "count": 0}
     orig_arr = np.array(orig)
     pred_arr = np.array(pred)
     abs_err = np.abs(orig_arr - pred_arr)
     return {
         "mae": float(abs_err.mean()),
         "rmse": float(np.sqrt(np.mean(abs_err ** 2))),
+        "count": len(abs_err),
     }
 
+def interpolate_masked_linear(masked_list):
+    # Füllt maskierte Werte mit linearer Interpolation.
+    return interpolate_masked(masked_list, method="linear")
 
-def compare_isolated_methods(data_path: str, trials: int = 50, base_seed: int = 42, fraction: float = 0.05):
-    series_list = _load_complete_series(data_path)
-    mae_lin, mae_spl, rmse_lin, rmse_spl = [], [], [], []
+
+def interpolate_masked_spline(masked_list, order: int = 3):
+    # Füllt maskierte Werte mit Spline-Interpolation.
+    return interpolate_masked(masked_list, method="spline", order=order)
+
+
+def compare_interpolation_methods(
+    df: pd.DataFrame,
+    missing_ratio_isolated: float,
+    missing_ratio_sequential: float,
+    trials: int = 100,
+    base_seed: int = 42,
+) -> dict[str, float]:
+    # Vergleicht die Leistung von linearer und Spline-Interpolation.
+    mae_lin_total = 0.0
+    mse_lin_total = 0.0
+    count_lin_total = 0
+
+    mae_spl_total = 0.0
+    mse_spl_total = 0.0
+    count_spl_total = 0
+    runs = 0
+
+    def _mean_safe(vals: list[float]) -> float:
+        return float(np.mean(vals)) if vals else float("nan")
+
+    def _fmt(x: float) -> str:
+        return f"{x:.2f}" if not np.isnan(x) else "nan"
+
+    base_rng = np.random.default_rng(base_seed)
+
     for t in range(trials):
-        trial_seed = base_seed + t
-        masked, pos = _mask_isolated(series_list, fraction=fraction, seed=trial_seed)
-        filled_lin = _interpolate(masked, method="linear")
-        filled_spl = _interpolate(masked, method="spline", order=3)
-        m_lin = _evaluate(series_list, filled_lin, pos)
-        m_spl = _evaluate(series_list, filled_spl, pos)
-        mae_lin.append(m_lin["mae"])
-        mae_spl.append(m_spl["mae"])
-        rmse_lin.append(m_lin["rmse"])
-        rmse_spl.append(m_spl["rmse"])
-    return (
-        float(np.nanmean(mae_lin)),
-        float(np.nanmean(mae_spl)),
-        float(np.nanmean(rmse_lin)),
-        float(np.nanmean(rmse_spl)),
-    )
+        seed = int(base_rng.integers(0, 2**31 - 1))
 
+        # Isolierte Lücken
+        masked_iso, pos_iso, orig_iso = mask_isolated(df, missing_ratio_isolated, seed)
+        filled_iso_lin = interpolate_masked_linear(masked_iso)
+        filled_iso_spl = interpolate_masked_spline(masked_iso, order=3)
+        eval_iso_lin = evaluate_masking(orig_iso, filled_iso_lin, pos_iso)
+        eval_iso_spl = evaluate_masking(orig_iso, filled_iso_spl, pos_iso)
 
-def fill_remaining_linear(df_filled: pd.DataFrame) -> pd.DataFrame:
-    filled_groups = []
-    filled_points: list[tuple[str, int, float]] = []
-    for country, group in df_filled.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
+        # Sequenzielle Lücken
+        masked_seq, pos_seq, orig_seq = mask_sequential(df, missing_ratio_sequential, seed)
+        filled_seq_lin = interpolate_masked_linear(masked_seq)
+        filled_seq_spl = interpolate_masked_spline(masked_seq, order=3)
+        eval_seq_lin = evaluate_masking(orig_seq, filled_seq_lin, pos_seq)
+        eval_seq_spl = evaluate_masking(orig_seq, filled_seq_spl, pos_seq)
+
+        # Per-Trial-Ausgabe
+        mae_linear_trial = _mean_safe([
+            ev["mae"] for ev in (eval_iso_lin, eval_seq_lin) if ev["count"] > 0 and not np.isnan(ev["mae"])
+        ])
+        rmse_linear_trial = _mean_safe([
+            ev["rmse"] for ev in (eval_iso_lin, eval_seq_lin) if ev["count"] > 0 and not np.isnan(ev["rmse"])
+        ])
+        mae_spline_trial = _mean_safe([
+            ev["mae"] for ev in (eval_iso_spl, eval_seq_spl) if ev["count"] > 0 and not np.isnan(ev["mae"])
+        ])
+        rmse_spline_trial = _mean_safe([
+            ev["rmse"] for ev in (eval_iso_spl, eval_seq_spl) if ev["count"] > 0 and not np.isnan(ev["rmse"])
+        ])
+        runs += 1
+
+        line = (
+            f"Durchgang {t+1}: "
+            f"mae_linear: {_fmt(mae_linear_trial)} | "
+            f"rmse_linear: {_fmt(rmse_linear_trial)} | "
+            f"mae_spline: {_fmt(mae_spline_trial)} | "
+            f"rmse_spline: {_fmt(rmse_spline_trial)}"
         )
+        print(line)
 
+        # Aggregation (gewichteter Mittelwert über alle Fehlstellen)
+        for ev in (eval_iso_lin, eval_seq_lin):
+            if ev["count"] > 0 and not np.isnan(ev["mae"]):
+                mae_lin_total += ev["mae"] * ev["count"]
+                mse_lin_total += (ev["rmse"] ** 2) * ev["count"]
+                count_lin_total += ev["count"]
+
+        for ev in (eval_iso_spl, eval_seq_spl):
+            if ev["count"] > 0 and not np.isnan(ev["mae"]):
+                mae_spl_total += ev["mae"] * ev["count"]
+                mse_spl_total += (ev["rmse"] ** 2) * ev["count"]
+                count_spl_total += ev["count"]
+
+    mae_linear = float(mae_lin_total / count_lin_total) if count_lin_total else float("nan")
+    rmse_linear = float(np.sqrt(mse_lin_total / count_lin_total)) if count_lin_total else float("nan")
+    mae_spline = float(mae_spl_total / count_spl_total) if count_spl_total else float("nan")
+    rmse_spline = float(np.sqrt(mse_spl_total / count_spl_total)) if count_spl_total else float("nan")
+
+    def _fmt(x: float) -> float:
+        return float("nan") if np.isnan(x) else round(x, 2)
+
+    return {
+        "mae_linear": _fmt(mae_linear),
+        "rmse_linear": _fmt(rmse_linear),
+        "mae_spline": _fmt(mae_spline),
+        "rmse_spline": _fmt(rmse_spline),
+        "runs": runs,
+    }
+
+def fill_remaining_linear(df: pd.DataFrame) -> pd.DataFrame:
+    # Interpoliert alle NaN-Einträge je Land per linearer Interpolation.
+    filled_groups: list[pd.DataFrame] = []
+    filled_points: list[tuple[str, int, float]] = []
+    for country, group in df.groupby("REF_AREA"):
+        group_sorted = group.sort_values("TIME_PERIOD").copy()
+        series = group_sorted.set_index("TIME_PERIOD")["OBS_VALUE"]
         if series.isna().any():
-            missing_mask = series.isna()
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            target_mask = missing_mask & (run_lengths >= 2)
-            if target_mask.any():
-                series_interp = series.interpolate(method='linear', limit_direction='both')
-                series_interp[series.notna()] = series[series.notna()]
-                newly_filled = series_interp[target_mask].dropna()
-                for yr, val in newly_filled.items():
-                    filled_points.append((country, int(yr), float(val)))
-                series[target_mask] = series_interp[target_mask]
-        series = series.dropna()
-        filled = series.reset_index()
-        filled['REF_AREA_LABEL'] = country
-        filled_groups.append(filled)
+            interp = series.interpolate(method="linear", limit_direction="both")
+            interp[series.notna()] = series[series.notna()]
+            newly_filled = interp[series.isna()].dropna()
+            if not newly_filled.empty:
+                filled_points.extend((country, int(yr), float(val)) for yr, val in newly_filled.items())
+            series = interp
+        filled_group = group_sorted.copy()
+        filled_group["OBS_VALUE"] = series.reindex(group_sorted["TIME_PERIOD"]).to_numpy()
+        filled_group = filled_group.dropna(subset=["OBS_VALUE"])
+        filled_groups.append(filled_group)
 
-    df_filled_linear = (
-        pd.concat(filled_groups, ignore_index=True)
-        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
-        .sort_values(['REF_AREA_LABEL', 'year'])
-        .reset_index(drop=True)
-    )
+    df_imputed = pd.concat(filled_groups, ignore_index=True)
+    df_imputed = df_imputed.sort_values(["REF_AREA", "TIME_PERIOD"]).reset_index(drop=True)
     if filled_points:
-        print()
-        print("================================================")
-        print("Gefüllte Zeitreihen (sequenzielle Lücken):")
-        print("================================================")
-        for country, yr, val in filled_points:
-            print(f"- {country} {yr}: {val:.3f}")
-    return df_filled_linear
+        print(f"{len(filled_points)} fehlende Werte mit linearer Interpolation gefüllt.")
+
+    return df_imputed
 
 
-def fill_remaining_spline(df_filled: pd.DataFrame, order: int = 3) -> pd.DataFrame:
-    filled_groups = []
+def fill_remaining_spline(df: pd.DataFrame, order: int = 3) -> pd.DataFrame:
+    # Interpoliert alle NaN-Einträge je Land per Spline-Interpolation.
+    filled_groups: list[pd.DataFrame] = []
     filled_points: list[tuple[str, int, float]] = []
-    for country, group in df_filled.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
-        )
-
-        if series.isna().any() and series.notna().sum() >= order + 1:
-            missing_mask = series.isna()
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            target_mask = missing_mask & (run_lengths >= 2)
-            if target_mask.any():
+    for country, group in df.groupby("REF_AREA"):
+        group_sorted = group.sort_values("TIME_PERIOD").copy()
+        series = group_sorted.set_index("TIME_PERIOD")["OBS_VALUE"]
+        if series.isna().any():
+            non_na = series.notna().sum()
+            if non_na >= 2:
+                eff_order = min(order, max(1, non_na - 1))
                 try:
-                    series_interp = series.interpolate(
-                        method='spline',
-                        order=order,
-                        limit_direction='both',
-                        limit_area=None,
-                    )
+                    interp = series.interpolate(method="spline", order=eff_order, limit_direction="both")
                 except Exception:
-                    series_interp = series.interpolate(method='linear', limit_direction='both')
-                series_interp[series.notna()] = series[series.notna()]
-                newly_filled = series_interp[target_mask].dropna()
-                for yr, val in newly_filled.items():
-                    filled_points.append((country, int(yr), float(val)))
-                # Nur die Ziel-Lücken übernehmen, Rest unverändert lassen
-                series[target_mask] = series_interp[target_mask]
-        # Verbleibende NaNs (nicht gefüllt) entfernen
-        series = series.dropna()
-        filled = series.reset_index()
-        filled['REF_AREA_LABEL'] = country
-        filled_groups.append(filled)
+                    interp = series.interpolate(method="linear", limit_direction="both")
+            else:
+                interp = series
+            interp[series.notna()] = series[series.notna()]
+            newly_filled = interp[series.isna()].dropna()
+            if not newly_filled.empty:
+                filled_points.extend((country, int(yr), float(val)) for yr, val in newly_filled.items())
+            series = interp
+        filled_group = group_sorted.copy()
+        filled_group["OBS_VALUE"] = series.reindex(group_sorted["TIME_PERIOD"]).to_numpy()
+        filled_group = filled_group.dropna(subset=["OBS_VALUE"])
+        filled_groups.append(filled_group)
 
-    df_filled_spline = (
-        pd.concat(filled_groups, ignore_index=True)
-        [['REF_AREA_LABEL', 'year', 'OBS_VALUE']]
-        .sort_values(['REF_AREA_LABEL', 'year'])
-        .reset_index(drop=True)
-    )
-    print("================================================")
-    print("Gefüllte Zeitreihen (sequenzielle Lücken):")
-    print("================================================")
-    print()
+    df_imputed = pd.concat(filled_groups, ignore_index=True)
+    df_imputed = df_imputed.sort_values(["REF_AREA", "TIME_PERIOD"]).reset_index(drop=True)
     if filled_points:
-        for country, yr, val in filled_points:
-            print(f"- {country} {yr}: {val:.3f}")
-    return df_filled_spline
-
-
-# Vergleich linear vs. Spline für 2er-Sequenzen (wird in main() nach isolierten Lücken aufgerufen)
-def _mask_blocks(series_list, fraction: float, seed: int):
-    rng = np.random.default_rng(seed)
-    masked_list = []
-    positions = []
-    for idx, (country, years, values) in enumerate(series_list):
-        vals = values.copy()
-        valid_starts = []
-        for j in range(1, len(vals) - 2):
-            if (
-                not np.isnan(vals[j - 1])
-                and not np.isnan(vals[j])
-                and not np.isnan(vals[j + 1])
-                and not np.isnan(vals[j + 2])
-            ):
-                valid_starts.append(j)
-        if not valid_starts:
-            masked_list.append((country, years, vals))
-            continue
-        target = max(1, int(len(valid_starts) * fraction))
-        available = set(valid_starts)
-        chosen = []
-        while available and len(chosen) < target:
-            s = rng.choice(sorted(available))
-            chosen.append(s)
-            for x in (s - 1, s, s + 1, s + 2):
-                available.discard(x)
-        for s in chosen:
-            for c in (s, s + 1):
-                positions.append((idx, c))
-                vals[c] = np.nan
-        masked_list.append((country, years, vals))
-    return masked_list, positions
-
-
-def _interp(series_list, method: str, order: int = 3):
-    out = []
-    for _, years, vals in series_list:
-        ser = pd.Series(vals, index=years).sort_index()
-        kwargs = {"method": method, "limit_direction": "both"}
-        if method == "spline":
-            # Effektive Ordnung nur, wenn genügend Stützpunkte vorhanden sind
-            non_na = ser.notna().sum()
-            eff_order = min(order, max(1, non_na - 1))
-            kwargs["order"] = eff_order
-        try:
-            out.append(ser.interpolate(**kwargs).to_numpy())
-        except Exception:
-            # Fallback auf linear, falls Spline scheitert
-            out.append(ser.interpolate(method="linear", limit_direction="both").to_numpy())
-    return out
-
-
-def _eval(series_list, filled_list, positions):
-    orig = []
-    pred = []
-    for idx, pos in positions:
-        o = series_list[idx][2][pos]
-        p = filled_list[idx][pos]
-        if np.isnan(o) or np.isnan(p):
-            continue
-        orig.append(o)
-        pred.append(p)
-    if not orig:
-        return {"mae": float("nan"), "rmse": float("nan")}
-    orig_arr = np.array(orig)
-    pred_arr = np.array(pred)
-    abs_err = np.abs(orig_arr - pred_arr)
-    return {"mae": float(abs_err.mean()), "rmse": float(np.sqrt(np.mean(abs_err ** 2)))}
-
-
-def compare_sequence_methods(data_path: str, trials: int = 50, base_seed: int = 42, fraction: float = 0.05):
-    series_list = _load_complete_series(data_path)
-    mae_lin = []
-    mae_spl = []
-    rmse_lin = []
-    rmse_spl = []
-    for t in range(trials):
-        seed = base_seed + t
-        masked, pos = _mask_blocks(series_list, fraction=fraction, seed=seed)
-        filled_lin = _interp(masked, method="linear")
-        filled_spl = _interp(masked, method="spline", order=3)
-        m_lin = _eval(series_list, filled_lin, pos)
-        m_spl = _eval(series_list, filled_spl, pos)
-        mae_lin.append(m_lin["mae"])
-        mae_spl.append(m_spl["mae"])
-        rmse_lin.append(m_lin["rmse"])
-        rmse_spl.append(m_spl["rmse"])
-    return (
-        float(np.nanmean(mae_lin)),
-        float(np.nanmean(mae_spl)),
-        float(np.nanmean(rmse_lin)),
-        float(np.nanmean(rmse_spl)),
-    )
-
-
-def save_clean(df_filled: pd.DataFrame, path: str, decimals: int | None = None) -> None:
-    output = df_filled[['REF_AREA_LABEL', 'year', 'OBS_VALUE']].copy()
-    if decimals is not None:
-        output['OBS_VALUE'] = output['OBS_VALUE'].round(decimals)
-    output.to_csv(path, index=False)
-    print()
-    print("================================================")
-    print(f"CSV-Datei abgespeichert unter: {path}")
-    print("================================================")
-
-
-def main():
-    df = load_data("data/raw/pharma_consumption.csv")
-    _ = find_gaps(df)
-
-    df_trimmed, _, _, _ = trim_by_missing_ratio(df, threshold=0.2)
-
-    # Prüfen, ob isolierte Lücken vorhanden sind
-    has_isolated = False
-    for _, group in df_trimmed.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
-        )
-        missing_mask = series.isna()
-        if missing_mask.any():
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            if (run_lengths[missing_mask] == 1).any():
-                has_isolated = True
-                break
-
-    if has_isolated:
-        avg_mae_lin, avg_mae_spl, avg_rmse_lin, avg_rmse_spl = compare_isolated_methods(
-            "data/raw/pharma_consumption.csv", trials=50, base_seed=42, fraction=0.05
-        )
-        print()
-        print("================================================")
-        print("Vergleich von linearer und Spline Interpolation für isolierte Lücken (MAE/RMSE, Durchschnitt):")
-        print("================================================")
-        print(f"Linear  MAE={avg_mae_lin:.4f}, RMSE={avg_rmse_lin:.4f}")
-        print(f"Spline  MAE={avg_mae_spl:.4f}, RMSE={avg_rmse_spl:.4f}")
-
-        if avg_mae_lin <= avg_mae_spl:
-            print()
-            print("-> Nutze lineare Interpolation für isolierte Lücken.")
-            df_filled_isolated = fill_isolated_linear(df_trimmed)
-        else:
-            print()
-            print("-> Nutze Spline-Interpolation für isolierte Lücken.")
-            df_filled_isolated = fill_isolated_spline(df_trimmed)
-    else:
-        df_filled_isolated = df_trimmed
-
-    # Prüfen, ob längere Sequenzen (Runs >=2) vorhanden sind
-    has_sequences = False
-    for _, group in df_filled_isolated.groupby('REF_AREA_LABEL'):
-        series = (
-            group
-            .sort_values('year')
-            .set_index('year')['OBS_VALUE']
-        )
-        missing_mask = series.isna()
-        if missing_mask.any():
-            run_lengths = missing_mask.groupby(missing_mask.ne(missing_mask.shift()).cumsum()).transform('sum')
-            if (run_lengths[missing_mask] >= 2).any():
-                has_sequences = True
-                break
-    
-    if has_sequences:
-        avg_seq_lin, avg_seq_spl, avg_seq_rmse_lin, avg_seq_rmse_spl = compare_sequence_methods(
-            "data/raw/pharma_consumption.csv", trials=50, base_seed=42, fraction=0.05
-        )
-        print()
-        print("================================================")
-        print("Vergleich von linearer und Spline Interpolation für sequenzielle Lücken (MAE/RMSE, Durchschnitt):")
-        print("================================================")
-        print(f"Linear  MAE={avg_seq_lin:.4f}, RMSE={avg_seq_rmse_lin:.4f}")
-        print(f"Spline  MAE={avg_seq_spl:.4f}, RMSE={avg_seq_rmse_spl:.4f}")
-
-        if avg_seq_lin <= avg_seq_spl:
-            print()
-            print("-> Nutze lineare Interpolation für längere Lücken.")
-            df_final = fill_remaining_linear(df_filled_isolated)
-        else:
-            print()
-            print("-> Nutze Spline-Interpolation für längere Lücken.")
-            df_final = fill_remaining_spline(df_filled_isolated)
-    else:
-        df_final = df_filled_isolated
-
-    save_clean(df_final, "data/raw/pharma_consumption_imputed.csv", decimals=1) #Datei Pfad später im Abgabeordner noch anpassen
-
-
-if __name__ == "__main__":
-    main()
-
+        print(f"{len(filled_points)} fehlende Werte mit Spline-Interpolation gefüllt.")
+        
+    return df_imputed
