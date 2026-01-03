@@ -319,7 +319,6 @@ def load_pharmaceutical_consumption(
 
 def load_pharmaceutical_consumption_from_csv(file_path: str) -> pd.DataFrame:
     # Lädt OECD-Verbrauchsdaten aus einer gespeicherten CSV-Datei
-
     df = pd.read_csv(file_path)
 
     # Typen und Sortierung anwenden
@@ -327,6 +326,7 @@ def load_pharmaceutical_consumption_from_csv(file_path: str) -> pd.DataFrame:
     df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
     df.sort_values(["PHARMACEUTICAL", "REF_AREA", "TIME_PERIOD"], inplace=True)
     df.reset_index(drop=True, inplace=True)
+    print(f"CSV-Datei erfolgreich geladen aus {file_path}")
     
     return df
 
@@ -336,10 +336,11 @@ def load_pharmaceutical_consumption_from_csv(file_path: str) -> pd.DataFrame:
 
 def simple_eda(df: pd.DataFrame) -> None:
     # Führt eine einfache explorative Datenanalyse durch und gibt Zusammenfassungen aus
-
     print(
         f"\n{df.shape[0]:,} Zeilen und {df.shape[1]:,} Spalten geladen für "
         f"{df['PHARMACEUTICAL'].nunique()} ATC-Codes und {df['REF_AREA'].nunique()} Länder."
     )
+    print()
     df.info()
     print(f"\n{df.head()}")
+
