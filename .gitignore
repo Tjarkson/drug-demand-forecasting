@@ -217,9 +217,8 @@ __marimo__/
 
 data/*
 !data/.gitkeep
+final/data/*
+!final/data/.gitkeep
 models/*
 reports/*.html
-
-# Ignore processed data
-final/data/
-
+settings.json
